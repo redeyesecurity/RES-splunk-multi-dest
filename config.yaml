@@ -1,111 +1,294 @@
 # etairos-log-agent configuration
-# All CLI flags can be set here. CLI args override config file values.
+# Standalone agent version
 # Start with: python3 agent.py --config config.yaml
 
 # ---------------------------------------------------------------------------
 # Inbound listener (from Splunk Universal Forwarder)
 # ---------------------------------------------------------------------------
 listener:
-  host: "0.0.0.0"       # bind address — use 0.0.0.0 for all interfaces
-  port: 9997             # port UF connects to (default Splunk S2S port)
+  host: "0.0.0.0"
+  port: 9997
 
   tls:
-    enabled: false       # set true to require TLS from UF
-    cert: ""             # path to server certificate PEM  e.g. /etc/etairos/certs/server.crt
-    key: ""              # path to server private key PEM  e.g. /etc/etairos/certs/server.key
-    ca: ""               # path to CA cert for client auth (optional — leave blank to skip client auth)
-    verify_client: false # true = require UF to present a cert signed by ca above
-    ignore_ssl: false    # true = accept any UF cert, skip all verification (testing only)
+    enabled: false
+    cert: ""
+    key: ""
+    ca: ""
+    verify_client: false
+    ignore_ssl: false
 
 # ---------------------------------------------------------------------------
 # Local output (decoded events written to disk)
 # ---------------------------------------------------------------------------
 output:
-  file: "/var/log/etairos/events.log"   # absolute path to output file
-  # Future: type: s3 | webhook | stdout
-  # Future: s3_bucket, s3_prefix, webhook_url
+  file: "/var/log/etairos/events.log"
 
 # ---------------------------------------------------------------------------
 # Forward (upstream to real Splunk indexer)
 # ---------------------------------------------------------------------------
 forward:
   enabled: true
-  host: ""               # indexer hostname or IP  e.g. splunk-indexer.corp
-  port: 9997             # indexer S2S port (almost always 9997)
+  host: ""
+  port: 9997
 
   tls:
-    enabled: false       # set true if indexer requires TLS
-    cert: ""             # client cert PEM for mutual TLS  e.g. /etc/etairos/certs/client.crt
-    key: ""              # client key PEM                  e.g. /etc/etairos/certs/client.key
-    ca: ""               # CA cert to verify indexer cert  e.g. /etc/etairos/certs/ca.crt
-    ignore_ssl: false    # true = skip indexer cert verification (testing only — never in prod)
+    enabled: false
+    cert: ""
+    key: ""
+    ca: ""
+    ignore_ssl: false
 
   failover:
-    mode: "fail-open"    # fail-open  = drop frames if indexer down, keep writing locally
-                         # fail-closed = buffer frames in memory until indexer recovers
-    queue_max: 100000    # max frames to buffer in fail-closed mode before dropping oldest
-    reconnect_delay: 2   # seconds between reconnect attempts when indexer is unreachable
-    retry_forever: true  # true = keep retrying forever; false = give up after max_retries
-    max_retries: 0       # 0 = unlimited (only used when retry_forever: false)
+    mode: "fail-open"
+    queue_max: 100000
+    reconnect_delay: 2
+    retry_forever: true
+    max_retries: 0
 
 # ---------------------------------------------------------------------------
-# Alternate Stream output (OCSF formatted — runs alongside the flat file output)
+# Alternate Stream - Send OCSF events to any destination
+# Multiple destinations can be enabled simultaneously
 # ---------------------------------------------------------------------------
-# Requires: pip install pyarrow        (for local-parquet or s3)
-#           pip install pyarrow boto3  (for s3)
-# local-json works with no extra deps.
-  alternate_stream:
-    enabled: false
+alternate_stream:
+  enabled: true
+  
+  destinations:
+    # ---------------------------------------------------------------------------
+    # Local JSON (testing/debugging)
+    # No dependencies
+    # ---------------------------------------------------------------------------
+    - type: "local-json"
+      enabled: false
+      path: "/var/log/etairos/events"
+      partition_by: "day"     # day | hour | none
 
-    # Destination: local-json | local-parquet | s3
-    destination: "local-json"
+    # ---------------------------------------------------------------------------
+    # Local Parquet (on-prem data lake)
+    # Requires: pip install pyarrow
+    # ---------------------------------------------------------------------------
+    - type: "local-parquet"
+      enabled: false
+      path: "/var/log/etairos/parquet"
+      partition_by: "day"
 
-    # Local base path (used for local-json and local-parquet)
-    # Files are written as Hive partitions:
-    #   <path>/class_uid=3005/year=2026/month=04/day=07/ocsf_<ts>_<id>.jsonl
-    path: "/var/log/etairos/alternate_stream"
-
-    # Flush a new file every N events OR every flush_interval seconds
-    batch_size: 1000
-    flush_interval: 60       # seconds
-
-    # Partition granularity: day | hour | none
-    partition_by: "day"
-
-    # S3 settings (only used when destination: s3)
-    s3:
-      bucket: ""             # e.g. my-security-alternate_stream
-      prefix: "etairos/ocsf" # S3 key prefix (no leading slash)
+    # ---------------------------------------------------------------------------
+    # AWS S3 / MinIO / Cloudflare R2
+    # Requires: pip install pyarrow boto3
+    # ---------------------------------------------------------------------------
+    - type: "s3"
+      enabled: false
+      bucket: ""
+      prefix: "etairos/ocsf"
       region: "us-east-1"
-      access_key: ""         # leave blank to use IAM role / env vars
+      endpoint_url: ""        # For MinIO/R2: https://your-endpoint
+      access_key: ""          # blank = IAM role / env vars
       secret_key: ""
+      partition_by: "day"
+
+    # ---------------------------------------------------------------------------
+    # Kafka / Confluent Cloud / Redpanda
+    # Requires: pip install confluent-kafka
+    # ---------------------------------------------------------------------------
+    - type: "kafka"
+      enabled: false
+      brokers:
+        - "kafka1:9092"
+        - "kafka2:9092"
+        - "kafka3:9092"
+      topic: "security-events"
+      
+      # Authentication
+      sasl:
+        enabled: false
+        mechanism: "PLAIN"    # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+        username: ""
+        password: ""
+      
+      tls:
+        enabled: false
+        ca: ""
+        cert: ""              # For mutual TLS
+        key: ""
+      
+      # Producer tuning
+      compression: "snappy"   # none | gzip | snappy | lz4 | zstd
+      acks: "all"             # 0 | 1 | all
+      batch_size: 16384       # bytes
+      linger_ms: 5            # wait up to N ms to batch
+      buffer_memory: 33554432 # 32MB producer buffer
+
+    # ---------------------------------------------------------------------------
+    # Grafana Loki
+    # Requires: pip install requests
+    # ---------------------------------------------------------------------------
+    - type: "loki"
+      enabled: false
+      url: "http://loki:3100/loki/api/v1/push"
+      
+      # Authentication
+      auth:
+        type: "none"          # none | basic | bearer
+        username: ""
+        password: ""
+        token: ""             # For bearer auth
+      
+      # Static labels (applied to all events)
+      labels:
+        job: "etairos-tee"
+        env: "production"
+        # host label added automatically from event
+      
+      # Dynamic labels from event fields (optional)
+      label_fields:
+        - "sourcetype"
+        - "source"
+      
+      tls:
+        enabled: false
+        ca: ""
+        verify: true
+      
+      batch_size: 100
+      flush_interval: 10      # seconds
+
+    # ---------------------------------------------------------------------------
+    # Elasticsearch / OpenSearch
+    # Requires: pip install elasticsearch (or opensearch-py)
+    # ---------------------------------------------------------------------------
+    - type: "elasticsearch"
+      enabled: false
+      hosts:
+        - "https://es1:9200"
+        - "https://es2:9200"
+      
+      # Index settings
+      index: "security-events"
+      index_date_pattern: "%Y.%m.%d"  # security-events-2026.04.07
+      
+      # Authentication
+      auth:
+        type: "none"          # none | basic | api_key | cloud_id
+        username: ""
+        password: ""
+        api_key: ""
+        cloud_id: ""          # Elastic Cloud
+      
+      tls:
+        enabled: true
+        ca: ""
+        verify: true
+      
+      # Bulk API settings
+      batch_size: 500
+      flush_interval: 5
+      max_retries: 3
+
+    # ---------------------------------------------------------------------------
+    # Generic Webhook (HTTP POST)
+    # Requires: pip install requests
+    # ---------------------------------------------------------------------------
+    - type: "webhook"
+      enabled: false
+      url: "https://your-endpoint.com/events"
+      method: "POST"
+      
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer your-token"
+        X-Custom-Header: "value"
+      
+      # Payload format
+      format: "json"          # json (array) | ndjson (newline-delimited)
+      batch: true             # true = batch into array, false = one req per event
+      
+      batch_size: 100
+      flush_interval: 10
+      timeout: 30             # seconds
+      
+      # Retry on failure
+      retry:
+        enabled: true
+        max_attempts: 3
+        backoff_ms: 1000      # exponential backoff base
+
+    # ---------------------------------------------------------------------------
+    # Syslog (RFC 5424)
+    # No dependencies (stdlib socket)
+    # ---------------------------------------------------------------------------
+    - type: "syslog"
+      enabled: false
+      host: "syslog.corp"
+      port: 514
+      protocol: "tcp"         # tcp | udp | tls
+      
+      facility: 16            # 0-23 (16 = local0)
+      severity: 6             # 0-7 (6 = info)
+      app_name: "etairos-tee"
+      
+      tls:
+        enabled: false
+        ca: ""
+        verify: true
+      
+      # For UDP, messages are sent immediately
+      # For TCP/TLS, batching applies
+      batch_size: 50
+      flush_interval: 5
+
+    # ---------------------------------------------------------------------------
+    # Azure Event Hubs
+    # Requires: pip install azure-eventhub
+    # ---------------------------------------------------------------------------
+    - type: "azure-eventhub"
+      enabled: false
+      connection_string: ""   # From Azure portal
+      eventhub_name: "security-events"
+      batch_size: 100
+      flush_interval: 10
+
+    # ---------------------------------------------------------------------------
+    # Google Cloud Pub/Sub
+    # Requires: pip install google-cloud-pubsub
+    # ---------------------------------------------------------------------------
+    - type: "gcp-pubsub"
+      enabled: false
+      project_id: ""
+      topic_id: "security-events"
+      credentials_file: ""    # Path to service account JSON (blank = ADC)
+      batch_size: 100
+      flush_interval: 10
+
+    # ---------------------------------------------------------------------------
+    # Splunk HEC (HTTP Event Collector)
+    # Requires: pip install requests
+    # Use this to send to a different Splunk instance or Cribl
+    # ---------------------------------------------------------------------------
+    - type: "splunk-hec"
+      enabled: false
+      url: "https://splunk-hec:8088/services/collector/event"
+      token: ""               # HEC token
+      index: "main"
+      sourcetype: "etairos:ocsf"
+      tls:
+        verify: true
+      batch_size: 100
+      flush_interval: 10
+
+  # Global defaults (overridden by per-destination settings)
+  batch_size: 1000
+  flush_interval: 60
 
 # ---------------------------------------------------------------------------
 # Indexer ACK (fake acknowledgment back to UF)
 # ---------------------------------------------------------------------------
-# When useACK=true in the UF's outputs.conf, the UF expects the indexer to
-# send back ACK packets per event batch. Without them the UF will:
-#   - Buffer events locally (fishbucket fills up)
-#   - Retransmit after ackTimeoutOnForwarder (default 120s)
-#   - Log warnings: "Received ack request but ack is not configured"
-#
-# This agent can send fake ACKs so the UF stays clean with no retransmit noise.
 ack:
-  enabled: auto       # auto  = detect from UF S2S handshake (recommended)
-                      # true  = always send ACKs regardless of UF request
-                      # false = never send ACKs (UF will buffer/retransmit)
-
-  mode: simple        # simple   = 4-byte sequence echo (works on all UF 6.x+)
-                      # extended = 8-byte (seq + status=0) for stricter UF configs
-
-  window_size: 1      # Send one ACK every N events
-                      # 1   = per-event ACK (safest, most responsive)
-                      # 10  = batch of 10 (reduces ACK traffic)
-                      # 100 = bulk mode (for high-volume migration testing)
+  enabled: auto
+  mode: simple
+  window_size: 1
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging:
-  level: "INFO"          # DEBUG | INFO | WARNING | ERROR
-  log_every_n: 500       # log a progress line every N events per connection
+  level: "INFO"
+  log_every_n: 500

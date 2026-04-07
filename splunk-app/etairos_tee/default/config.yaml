@@ -22,24 +22,131 @@ forward:
     queue_max: 100000
     reconnect_delay: 2
 
+# ---------------------------------------------------------------------------
+# Alternate Stream - Send OCSF events to any destination
+# Multiple destinations can be enabled simultaneously
+# ---------------------------------------------------------------------------
 alternate_stream:
   enabled: true
-  destination: "local-json"   # local-json | local-parquet | s3
   
-  # Local path (use forward slashes even on Windows)
-  path: "/var/log/etairos/alternate_stream"
-  
-  # S3 settings
-  s3:
-    bucket: ""
-    prefix: "etairos/ocsf"
-    region: "us-east-1"
-    access_key: ""
-    secret_key: ""
-  
+  # Enable one or more destinations (all run in parallel)
+  destinations:
+    - type: "local-json"      # For testing/debugging
+      enabled: false
+      path: "/var/log/etairos/events"
+      partition_by: "day"     # day | hour | none
+    
+    - type: "local-parquet"   # Local data lake
+      enabled: false
+      path: "/var/log/etairos/parquet"
+      partition_by: "day"
+    
+    - type: "s3"              # AWS S3 / MinIO / R2
+      enabled: false
+      bucket: ""
+      prefix: "etairos/ocsf"
+      region: "us-east-1"
+      access_key: ""          # blank = use IAM role / env vars
+      secret_key: ""
+      partition_by: "day"
+    
+    - type: "kafka"           # Kafka / Confluent / Redpanda
+      enabled: false
+      brokers:
+        - "kafka1:9092"
+        - "kafka2:9092"
+      topic: "security-events"
+      # Authentication (optional)
+      sasl:
+        enabled: false
+        mechanism: "PLAIN"    # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+        username: ""
+        password: ""
+      tls:
+        enabled: false
+        ca: ""
+        cert: ""
+        key: ""
+      # Producer settings
+      compression: "snappy"   # none | gzip | snappy | lz4 | zstd
+      acks: "all"             # 0 | 1 | all
+      batch_size: 16384
+      linger_ms: 5
+    
+    - type: "loki"            # Grafana Loki
+      enabled: false
+      url: "http://loki:3100/loki/api/v1/push"
+      # Authentication (optional)
+      auth:
+        type: "none"          # none | basic | bearer
+        username: ""
+        password: ""
+        token: ""
+      # Labels applied to all events
+      labels:
+        job: "etairos-tee"
+        env: "production"
+      # TLS (optional)
+      tls:
+        enabled: false
+        ca: ""
+        verify: true
+      batch_size: 100
+      flush_interval: 10
+    
+    - type: "elasticsearch"   # Elasticsearch / OpenSearch
+      enabled: false
+      hosts:
+        - "https://es1:9200"
+        - "https://es2:9200"
+      index: "security-events"
+      # Index pattern: security-events-2026.04.07
+      index_date_pattern: "%Y.%m.%d"
+      # Authentication
+      auth:
+        type: "none"          # none | basic | api_key
+        username: ""
+        password: ""
+        api_key: ""
+      tls:
+        enabled: true
+        ca: ""
+        verify: true
+      batch_size: 500
+      flush_interval: 5
+    
+    - type: "webhook"         # Generic HTTP POST
+      enabled: false
+      url: "https://your-endpoint.com/events"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer your-token"
+      # Payload format
+      format: "json"          # json | ndjson (newline-delimited)
+      batch: true             # true = array of events, false = one request per event
+      batch_size: 100
+      flush_interval: 10
+      # Retry settings
+      retry:
+        enabled: true
+        max_attempts: 3
+        backoff_ms: 1000
+    
+    - type: "syslog"          # RFC 5424 syslog
+      enabled: false
+      host: "syslog.corp"
+      port: 514
+      protocol: "tcp"         # tcp | udp | tls
+      facility: 16            # local0
+      tls:
+        enabled: false
+        ca: ""
+        verify: true
+
+  # Global batching defaults (can be overridden per destination)
   batch_size: 1000
   flush_interval: 60
-  partition_by: "day"
 
 ack:
   enabled: auto
