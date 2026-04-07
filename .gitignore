@@ -1,0 +1,9 @@
+*.log
+*.pem
+*.crt
+*.key
+*.csr
+*.srl
+__pycache__/
+*.pyc
+.env
