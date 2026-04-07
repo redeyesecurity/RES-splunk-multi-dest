@@ -81,6 +81,29 @@ forward:
       secret_key: ""
 
 # ---------------------------------------------------------------------------
+# Indexer ACK (fake acknowledgment back to UF)
+# ---------------------------------------------------------------------------
+# When useACK=true in the UF's outputs.conf, the UF expects the indexer to
+# send back ACK packets per event batch. Without them the UF will:
+#   - Buffer events locally (fishbucket fills up)
+#   - Retransmit after ackTimeoutOnForwarder (default 120s)
+#   - Log warnings: "Received ack request but ack is not configured"
+#
+# This agent can send fake ACKs so the UF stays clean with no retransmit noise.
+ack:
+  enabled: auto       # auto  = detect from UF S2S handshake (recommended)
+                      # true  = always send ACKs regardless of UF request
+                      # false = never send ACKs (UF will buffer/retransmit)
+
+  mode: simple        # simple   = 4-byte sequence echo (works on all UF 6.x+)
+                      # extended = 8-byte (seq + status=0) for stricter UF configs
+
+  window_size: 1      # Send one ACK every N events
+                      # 1   = per-event ACK (safest, most responsive)
+                      # 10  = batch of 10 (reduces ACK traffic)
+                      # 100 = bulk mode (for high-volume migration testing)
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging:

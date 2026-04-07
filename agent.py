@@ -35,6 +35,9 @@ try:
 except ImportError:
     _LAKEHOUSE_AVAILABLE = False
 
+# ACK handler
+from ack_handler import AckConfig, AckHandler
+
 # yaml is stdlib in Python 3.11+; fall back to a tiny inline parser for older versions
 try:
     import yaml
@@ -163,6 +166,9 @@ class Config:
 
         # Lakehouse
         self.lakehouse_raw = deep_get(raw, "output", "lakehouse") or {}
+
+        # ACK
+        self.ack_raw = deep_get(raw, "ack") or {}
 
     def validate(self):
         if self.tls and (not self.cert or not self.key):
@@ -342,7 +348,7 @@ class Forwarder:
 # Client handler
 # ---------------------------------------------------------------------------
 
-def handle_client(conn, addr, cfg: Config, lock, forwarder, lakehouse=None):
+def handle_client(conn, addr, cfg: Config, lock, forwarder, lakehouse=None, ack_cfg=None):
     log.info(f"UF connected: {addr[0]}:{addr[1]}")
     events_written = 0
     try:
@@ -351,6 +357,14 @@ def handle_client(conn, addr, cfg: Config, lock, forwarder, lakehouse=None):
             log.warning(f"{addr}: Bad S2S signature {header[:4]!r} — dropping")
             return
         log.info(f"{addr}: S2S handshake OK")
+
+        # Set up ACK handler for this connection
+        ack: AckHandler = ack_cfg.make_handler(conn) if ack_cfg else None
+        if ack and not ack_cfg.should_ack(header):
+            ack.disable()
+            log.debug(f"{addr}: ACK mode disabled (not requested by UF)")
+        elif ack:
+            log.info(f"{addr}: ACK mode active (mode={ack_cfg.ack_mode}, window={ack_cfg.window})")
 
         if forwarder:
             forwarder.send_handshake(header)
@@ -389,6 +403,10 @@ def handle_client(conn, addr, cfg: Config, lock, forwarder, lakehouse=None):
             if lakehouse:
                 lakehouse.write(fields)
 
+            # ACK back to UF
+            if ack:
+                ack.record_event()
+
             events_written += 1
             if events_written % cfg.log_every_n == 0:
                 log.info(f"{addr}: {events_written} events written")
@@ -396,6 +414,9 @@ def handle_client(conn, addr, cfg: Config, lock, forwarder, lakehouse=None):
     except Exception as e:
         log.error(f"{addr}: {e}")
     finally:
+        # Flush any pending ACKs before closing
+        if ack:
+            ack.flush()
         conn.close()
         log.info(f"{addr}: disconnected — {events_written} events written")
 
@@ -451,6 +472,9 @@ def run_server(cfg: Config):
     elif cfg.lakehouse_raw.get("enabled"):
         log.warning("Lakehouse enabled in config but lakehouse_writer.py not found — skipping")
 
+    # ACK config
+    ack_cfg = AckConfig(cfg.ack_raw) if cfg.ack_raw else AckConfig({})
+
     log.setLevel(cfg.log_level)
     log.info(f"Listening on {cfg.host}:{cfg.port} — writing to {cfg.output}")
 
@@ -481,7 +505,7 @@ def run_server(cfg: Config):
 
         t = threading.Thread(
             target=handle_client,
-            args=(conn, addr, cfg, lock, forwarder, lakehouse),
+            args=(conn, addr, cfg, lock, forwarder, lakehouse, ack_cfg),
             daemon=True
         )
         t.start()
