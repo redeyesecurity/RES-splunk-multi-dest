@@ -1,8 +1,8 @@
 # Etairos Log Agent
 
-**Splunk S2S tee proxy with OCSF lakehouse output.**
+**Splunk S2S tee proxy with OCSF alternate_stream output.**
 
-Sits transparently between your Splunk Universal Forwarders and indexers. Receives the UF data stream, extracts log events, converts them to OCSF format, and writes to your lakehouse (S3/Parquet, local files) — while simultaneously forwarding the original stream to your Splunk indexer unchanged.
+Sits transparently between your Splunk Universal Forwarders and indexers. Receives the UF data stream, extracts log events, converts them to OCSF format, and writes to your alternate_stream (S3/Parquet, local files) — while simultaneously forwarding the original stream to your Splunk indexer unchanged.
 
 ```
                                     ┌─────────────────────────────┐
@@ -24,7 +24,7 @@ Sits transparently between your Splunk Universal Forwarders and indexers. Receiv
                                               │
                                               ▼
                                     ┌─────────────────────────────┐
-                                    │   Lakehouse / S3 / Local    │
+                                    │   Alternate Stream / S3 / Local    │
                                     │   (OCSF Parquet)            │
                                     └─────────────────────────────┘
 ```
@@ -45,7 +45,7 @@ Sits transparently between your Splunk Universal Forwarders and indexers. Receiv
 | **TLS Support** | Inbound (from UF) and outbound (to indexer) independently configurable |
 | **Fake ACKs** | Responds to `useACK=true` UFs so they don't buffer/retransmit |
 | **OCSF Mapping** | Converts 7+ event classes (auth, network, DNS, HTTP, process, file, security) |
-| **Lakehouse Output** | S3 Parquet, local Parquet, or local JSON — Hive-partitioned |
+| **Alternate Stream Output** | S3 Parquet, local Parquet, or local JSON — Hive-partitioned |
 | **Fail-open/closed** | Choose behavior when indexer is unreachable |
 | **Config file** | YAML-based, all settings in one place |
 | **No dependencies** | Core agent runs on Python 3.7+ stdlib only |
@@ -87,7 +87,7 @@ $SPLUNK_HOME/bin/splunk restart
 python3 agent.py --config config.local.yaml
 ```
 
-That's it. Events flow through the agent to your indexer and lakehouse.
+That's it. Events flow through the agent to your indexer and alternate_stream.
 
 ---
 
@@ -145,20 +145,20 @@ forward:
     reconnect_delay: 2  # Seconds between retries
 ```
 
-### Lakehouse (OCSF output)
+### Alternate Stream (OCSF output)
 
 ```yaml
 output:
-  lakehouse:
+  alternate_stream:
     enabled: true
     destination: "s3"      # s3 | local-parquet | local-json
     
     # Local paths (for local-json / local-parquet)
-    path: "/var/log/etairos/lakehouse"
+    path: "/var/log/etairos/alternate_stream"
     
     # S3 settings
     s3:
-      bucket: "my-security-lakehouse"
+      bucket: "my-security-alternate_stream"
       prefix: "etairos/ocsf"
       region: "us-east-1"
       access_key: ""       # Blank = use IAM role
@@ -172,7 +172,7 @@ output:
 
 **Output structure (Hive-partitioned):**
 ```
-s3://my-security-lakehouse/etairos/ocsf/
+s3://my-security-alternate_stream/etairos/ocsf/
   class_uid=4002/year=2026/month=04/day=07/ocsf_20260407_194000_a1b2c3d4.parquet
   class_uid=3005/year=2026/month=04/day=07/ocsf_20260407_194000_e5f6g7h8.parquet
 ```
@@ -253,7 +253,7 @@ The agent maps Splunk events to [OCSF v1.1](https://schema.ocsf.io) based on `so
 ```bash
 # Copy files
 sudo mkdir -p /opt/etairos-log-agent
-sudo cp agent.py ocsf_mapper.py lakehouse_writer.py ack_handler.py config.yaml /opt/etairos-log-agent/
+sudo cp agent.py ocsf_mapper.py alternate_stream_writer.py ack_handler.py config.yaml /opt/etairos-log-agent/
 sudo cp etairos-log-agent.service /etc/systemd/system/
 
 # Create user and directories
@@ -275,7 +275,7 @@ sudo journalctl -u etairos-log-agent -f
 ```dockerfile
 FROM python:3.11-slim
 WORKDIR /app
-COPY agent.py ocsf_mapper.py lakehouse_writer.py ack_handler.py config.yaml ./
+COPY agent.py ocsf_mapper.py alternate_stream_writer.py ack_handler.py config.yaml ./
 RUN pip install pyarrow boto3  # Only needed for Parquet/S3
 EXPOSE 9997
 CMD ["python3", "agent.py", "--config", "config.yaml"]
@@ -335,22 +335,22 @@ $SPLUNK_HOME/etc/auth/client.pem  # → agent's forward-cert + forward-key
 ### Phase 1: Shadow mode (no risk)
 
 1. Deploy agent on a dedicated host
-2. Configure: forward enabled, lakehouse enabled
+2. Configure: forward enabled, alternate_stream enabled
 3. Update one test UF to point at agent
-4. Verify: Splunk receives events, lakehouse files appear
-5. Compare event counts between Splunk and lakehouse
+4. Verify: Splunk receives events, alternate_stream files appear
+5. Compare event counts between Splunk and alternate_stream
 
 ### Phase 2: Expand
 
 1. Roll out to more UFs (10%, 50%, 100%)
 2. Monitor agent logs for errors
-3. Validate OCSF schema in lakehouse
-4. Build queries/dashboards on lakehouse data
+3. Validate OCSF schema in alternate_stream
+4. Build queries/dashboards on alternate_stream data
 
 ### Phase 3: Cutover
 
 1. Disable forwarding (`forward.enabled: false`)
-2. UFs now only write to lakehouse
+2. UFs now only write to alternate_stream
 3. Keep Splunk running for historical queries
 4. Decommission Splunk on your timeline
 
@@ -382,11 +382,11 @@ openssl s_client -connect <agent-ip>:9997
 openssl x509 -in server.crt -noout -dates
 ```
 
-### Events not appearing in lakehouse
+### Events not appearing in alternate_stream
 
 ```bash
 # Check agent logs
-journalctl -u etairos-log-agent | grep -i lakehouse
+journalctl -u etairos-log-agent | grep -i alternate_stream
 
 # Verify batch flush
 # Events buffer until batch_size OR flush_interval — check config
@@ -407,7 +407,7 @@ This means ACKs aren't working. Check:
 |------|---------|
 | `agent.py` | Main S2S listener, forwarder, orchestration |
 | `ocsf_mapper.py` | Splunk field → OCSF event conversion |
-| `lakehouse_writer.py` | Batched async write to S3/Parquet/JSON |
+| `alternate_stream_writer.py` | Batched async write to S3/Parquet/JSON |
 | `ack_handler.py` | Fake S2S ACK responder |
 | `config.yaml` | All configuration |
 | `etairos-log-agent.service` | systemd unit file |

@@ -2,12 +2,12 @@
 """
 Etairos Log Agent — S2S Tee Proxy
 Sits between Splunk UF and your real indexer. Receives the UF stream,
-decodes events for local output (file, future lakehouse), and simultaneously
+decodes events for local output (file, future alternate_stream), and simultaneously
 forwards the raw bytes upstream to the real indexer unchanged.
 
 Architecture:
   [Splunk UF] --> [etairos-log-agent :9997] --> [Real Splunk Indexer :9997]
-                                             --> [output file / lakehouse]
+                                             --> [output file / alternate_stream]
 
 Usage:
   python3 agent.py --config config.yaml
@@ -28,12 +28,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
-# Lakehouse plugin (optional — only active when output.lakehouse.enabled: true)
+# Alternate Stream plugin (optional — only active when output.alternate_stream.enabled: true)
 try:
-    from lakehouse_writer import LakehouseWriter, LakehouseConfig
-    _LAKEHOUSE_AVAILABLE = True
+    from alternate_stream_writer import Alternate StreamWriter, Alternate StreamConfig
+    _ALTERNATE_STREAM_AVAILABLE = True
 except ImportError:
-    _LAKEHOUSE_AVAILABLE = False
+    _ALTERNATE_STREAM_AVAILABLE = False
 
 # ACK handler
 from ack_handler import AckConfig, AckHandler
@@ -164,8 +164,8 @@ class Config:
         self.log_level    = lg.get("level",        "INFO")
         self.log_every_n  = lg.get("log_every_n",  500)
 
-        # Lakehouse
-        self.lakehouse_raw = deep_get(raw, "output", "lakehouse") or {}
+        # Alternate Stream
+        self.alternate_stream_raw = deep_get(raw, "output", "alternate_stream") or {}
 
         # ACK
         self.ack_raw = deep_get(raw, "ack") or {}
@@ -348,7 +348,7 @@ class Forwarder:
 # Client handler
 # ---------------------------------------------------------------------------
 
-def handle_client(conn, addr, cfg: Config, lock, forwarder, lakehouse=None, ack_cfg=None):
+def handle_client(conn, addr, cfg: Config, lock, forwarder, alternate_stream=None, ack_cfg=None):
     log.info(f"UF connected: {addr[0]}:{addr[1]}")
     events_written = 0
     try:
@@ -399,9 +399,9 @@ def handle_client(conn, addr, cfg: Config, lock, forwarder, lakehouse=None, ack_
                 with open(cfg.output, "a", encoding="utf-8") as f:
                     f.write(line)
 
-            # Lakehouse output (OCSF)
-            if lakehouse:
-                lakehouse.write(fields)
+            # Alternate Stream output (OCSF)
+            if alternate_stream:
+                alternate_stream.write(fields)
 
             # ACK back to UF
             if ack:
@@ -463,14 +463,14 @@ def run_server(cfg: Config):
     os.makedirs(os.path.dirname(os.path.abspath(cfg.output)), exist_ok=True)
     lock = threading.Lock()
 
-    # Lakehouse writer
-    lakehouse = None
-    if _LAKEHOUSE_AVAILABLE and cfg.lakehouse_raw.get("enabled"):
-        lh_cfg   = LakehouseConfig(cfg.lakehouse_raw)
+    # Alternate Stream writer
+    alternate_stream = None
+    if _ALTERNATE_STREAM_AVAILABLE and cfg.alternate_stream_raw.get("enabled"):
+        lh_cfg   = Alternate StreamConfig(cfg.alternate_stream_raw)
         lh_cfg.validate()
-        lakehouse = LakehouseWriter(lh_cfg, shutdown_event)
-    elif cfg.lakehouse_raw.get("enabled"):
-        log.warning("Lakehouse enabled in config but lakehouse_writer.py not found — skipping")
+        alternate_stream = Alternate StreamWriter(lh_cfg, shutdown_event)
+    elif cfg.alternate_stream_raw.get("enabled"):
+        log.warning("Alternate Stream enabled in config but alternate_stream_writer.py not found — skipping")
 
     # ACK config
     ack_cfg = AckConfig(cfg.ack_raw) if cfg.ack_raw else AckConfig({})
@@ -505,7 +505,7 @@ def run_server(cfg: Config):
 
         t = threading.Thread(
             target=handle_client,
-            args=(conn, addr, cfg, lock, forwarder, lakehouse, ack_cfg),
+            args=(conn, addr, cfg, lock, forwarder, alternate_stream, ack_cfg),
             daemon=True
         )
         t.start()

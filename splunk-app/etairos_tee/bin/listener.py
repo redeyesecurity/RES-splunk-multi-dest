@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Etairos Tee Listener - S2S protocol handler
-Receives from UF, forwards to indexer, writes to lakehouse
+Receives from UF, forwards to indexer, writes to alternate_stream
 """
 
 import socket
@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
-# Optional imports for lakehouse
+# Optional imports for alternate_stream
 try:
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -44,14 +44,14 @@ class TeeListener:
         self.stats = {
             "events_received": 0,
             "events_forwarded": 0,
-            "events_lakehouse": 0,
+            "events_alternate_stream": 0,
             "errors": 0,
             "start_time": None
         }
         
-        # Lakehouse writer thread
-        self.lakehouse_thread = None
-        self.lakehouse_batch = []
+        # Alternate Stream writer thread
+        self.alternate_stream_thread = None
+        self.alternate_stream_batch = []
         self.last_flush = time.time()
         
         # Import OCSF mapper
@@ -83,15 +83,15 @@ class TeeListener:
             self.logger.error(f"Failed to bind to {host}:{port}: {e}")
             raise
         
-        # Start lakehouse writer thread
-        if self.config.get("lakehouse", {}).get("enabled"):
-            self.lakehouse_thread = threading.Thread(
-                target=self._lakehouse_writer_loop,
-                name="lakehouse-writer",
+        # Start alternate_stream writer thread
+        if self.config.get("alternate_stream", {}).get("enabled"):
+            self.alternate_stream_thread = threading.Thread(
+                target=self._alternate_stream_writer_loop,
+                name="alternate_stream-writer",
                 daemon=True
             )
-            self.lakehouse_thread.start()
-            self.logger.info("Lakehouse writer started")
+            self.alternate_stream_thread.start()
+            self.logger.info("Alternate Stream writer started")
         
         # Start accept loop in main thread
         self._accept_loop()
@@ -108,9 +108,9 @@ class TeeListener:
             except:
                 pass
         
-        # Flush remaining lakehouse batch
-        if self.lakehouse_batch:
-            self._flush_lakehouse()
+        # Flush remaining alternate_stream batch
+        if self.alternate_stream_batch:
+            self._flush_alternate_stream()
         
         self.logger.info(f"Final stats: {json.dumps(self.stats)}")
     
@@ -168,12 +168,12 @@ class TeeListener:
                         self.logger.warning("Forward failed, reconnecting...")
                         forward_socket = self._connect_to_indexer()
                 
-                # Decode and queue for lakehouse
+                # Decode and queue for alternate_stream
                 events = self._decode_s2s_frame(frame_data)
                 for event in events:
                     self.stats["events_received"] += 1
                     
-                    if self.config.get("lakehouse", {}).get("enabled"):
+                    if self.config.get("alternate_stream", {}).get("enabled"):
                         try:
                             self.event_queue.put_nowait(event)
                         except queue.Full:
@@ -187,7 +187,7 @@ class TeeListener:
                 if self.stats["events_received"] % self.config.get("logging", {}).get("log_every_n", 500) == 0:
                     self.logger.info(f"Events: {self.stats['events_received']} received, "
                                    f"{self.stats['events_forwarded']} forwarded, "
-                                   f"{self.stats['events_lakehouse']} to lakehouse")
+                                   f"{self.stats['events_alternate_stream']} to alternate_stream")
         
         except Exception as e:
             self.logger.exception(f"Connection handler error: {e}")
@@ -283,10 +283,10 @@ class TeeListener:
         except:
             pass
     
-    def _lakehouse_writer_loop(self):
-        """Background thread for batched lakehouse writes"""
-        batch_size = self.config.get("lakehouse", {}).get("batch_size", 1000)
-        flush_interval = self.config.get("lakehouse", {}).get("flush_interval", 60)
+    def _alternate_stream_writer_loop(self):
+        """Background thread for batched alternate_stream writes"""
+        batch_size = self.config.get("alternate_stream", {}).get("batch_size", 1000)
+        flush_interval = self.config.get("alternate_stream", {}).get("flush_interval", 60)
         
         while self.running:
             try:
@@ -300,27 +300,27 @@ class TeeListener:
                     else:
                         ocsf_event = event
                     
-                    self.lakehouse_batch.append(ocsf_event)
+                    self.alternate_stream_batch.append(ocsf_event)
                     
                 except queue.Empty:
                     pass
                 
                 # Flush if batch full or interval elapsed
                 now = time.time()
-                if (len(self.lakehouse_batch) >= batch_size or 
-                    (self.lakehouse_batch and now - self.last_flush >= flush_interval)):
-                    self._flush_lakehouse()
+                if (len(self.alternate_stream_batch) >= batch_size or 
+                    (self.alternate_stream_batch and now - self.last_flush >= flush_interval)):
+                    self._flush_alternate_stream()
                     
             except Exception as e:
-                self.logger.exception(f"Lakehouse writer error: {e}")
+                self.logger.exception(f"Alternate Stream writer error: {e}")
                 time.sleep(1)
     
-    def _flush_lakehouse(self):
-        """Write batch to lakehouse destination"""
-        if not self.lakehouse_batch:
+    def _flush_alternate_stream(self):
+        """Write batch to alternate_stream destination"""
+        if not self.alternate_stream_batch:
             return
         
-        destination = self.config.get("lakehouse", {}).get("destination", "local-json")
+        destination = self.config.get("alternate_stream", {}).get("destination", "local-json")
         
         try:
             if destination == "local-json":
@@ -330,20 +330,20 @@ class TeeListener:
             elif destination == "s3":
                 self._write_s3()
             
-            self.stats["events_lakehouse"] += len(self.lakehouse_batch)
-            self.logger.info(f"Flushed {len(self.lakehouse_batch)} events to {destination}")
+            self.stats["events_alternate_stream"] += len(self.alternate_stream_batch)
+            self.logger.info(f"Flushed {len(self.alternate_stream_batch)} events to {destination}")
             
         except Exception as e:
-            self.logger.error(f"Lakehouse flush failed: {e}")
+            self.logger.error(f"Alternate Stream flush failed: {e}")
             self.stats["errors"] += 1
         
-        self.lakehouse_batch = []
+        self.alternate_stream_batch = []
         self.last_flush = time.time()
     
     def _write_local_json(self):
         """Write batch as JSON lines to local filesystem"""
-        base_path = Path(self.config.get("lakehouse", {}).get("path", "/var/log/etairos/lakehouse"))
-        partition = self.config.get("lakehouse", {}).get("partition_by", "day")
+        base_path = Path(self.config.get("alternate_stream", {}).get("path", "/var/log/etairos/alternate_stream"))
+        partition = self.config.get("alternate_stream", {}).get("partition_by", "day")
         
         # Build partition path
         now = datetime.now(timezone.utc)
@@ -361,7 +361,7 @@ class TeeListener:
         filepath = part_path / filename
         
         with open(filepath, "w") as f:
-            for event in self.lakehouse_batch:
+            for event in self.alternate_stream_batch:
                 f.write(json.dumps(event) + "\n")
     
     def _write_local_parquet(self):
@@ -371,7 +371,7 @@ class TeeListener:
             return
         
         # Similar to JSON but with Parquet output
-        base_path = Path(self.config.get("lakehouse", {}).get("path", "/var/log/etairos/lakehouse"))
+        base_path = Path(self.config.get("alternate_stream", {}).get("path", "/var/log/etairos/alternate_stream"))
         now = datetime.now(timezone.utc)
         part_path = base_path / f"year={now.year}" / f"month={now.month:02d}" / f"day={now.day:02d}"
         part_path.mkdir(parents=True, exist_ok=True)
@@ -380,7 +380,7 @@ class TeeListener:
         filepath = part_path / filename
         
         # Convert to PyArrow table and write
-        table = pa.Table.from_pylist(self.lakehouse_batch)
+        table = pa.Table.from_pylist(self.alternate_stream_batch)
         pq.write_table(table, filepath)
     
     def _write_s3(self):
@@ -392,7 +392,7 @@ class TeeListener:
             self.logger.error("pyarrow not installed, cannot write Parquet")
             return
         
-        s3_config = self.config.get("lakehouse", {}).get("s3", {})
+        s3_config = self.config.get("alternate_stream", {}).get("s3", {})
         bucket = s3_config.get("bucket")
         prefix = s3_config.get("prefix", "etairos/ocsf")
         
@@ -406,7 +406,7 @@ class TeeListener:
         
         # Write to temp file then upload
         import tempfile
-        table = pa.Table.from_pylist(self.lakehouse_batch)
+        table = pa.Table.from_pylist(self.alternate_stream_batch)
         
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
             pq.write_table(table, tmp.name)

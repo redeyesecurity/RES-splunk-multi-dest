@@ -49,12 +49,12 @@ forward:
     max_retries: 0       # 0 = unlimited (only used when retry_forever: false)
 
 # ---------------------------------------------------------------------------
-# Lakehouse output (OCSF formatted — runs alongside the flat file output)
+# Alternate Stream output (OCSF formatted — runs alongside the flat file output)
 # ---------------------------------------------------------------------------
 # Requires: pip install pyarrow        (for local-parquet or s3)
 #           pip install pyarrow boto3  (for s3)
 # local-json works with no extra deps.
-  lakehouse:
+  alternate_stream:
     enabled: false
 
     # Destination: local-json | local-parquet | s3
@@ -63,7 +63,7 @@ forward:
     # Local base path (used for local-json and local-parquet)
     # Files are written as Hive partitions:
     #   <path>/class_uid=3005/year=2026/month=04/day=07/ocsf_<ts>_<id>.jsonl
-    path: "/var/log/etairos/lakehouse"
+    path: "/var/log/etairos/alternate_stream"
 
     # Flush a new file every N events OR every flush_interval seconds
     batch_size: 1000
@@ -74,7 +74,7 @@ forward:
 
     # S3 settings (only used when destination: s3)
     s3:
-      bucket: ""             # e.g. my-security-lakehouse
+      bucket: ""             # e.g. my-security-alternate_stream
       prefix: "etairos/ocsf" # S3 key prefix (no leading slash)
       region: "us-east-1"
       access_key: ""         # leave blank to use IAM role / env vars

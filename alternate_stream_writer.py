@@ -1,5 +1,5 @@
 """
-lakehouse_writer.py — Batched OCSF output to S3 (Parquet) or local files (JSON/Parquet)
+alternate_stream_writer.py — Batched OCSF output to S3 (Parquet) or local files (JSON/Parquet)
 
 Destinations:
   local-json    Write newline-delimited JSON to a local directory (no extra deps)
@@ -14,7 +14,7 @@ Files are rotated on:
 File naming:
   ocsf_<class_uid>_<YYYYMMDD_HHMMSS>_<uuid4>.jsonl / .parquet
 
-Configure in config.yaml under output.lakehouse.*
+Configure in config.yaml under output.alternate_stream.*
 """
 
 import json
@@ -29,7 +29,7 @@ from typing import Optional
 
 from ocsf_mapper import to_ocsf
 
-log = logging.getLogger("etairos-log-agent.lakehouse")
+log = logging.getLogger("etairos-log-agent.alternate_stream")
 
 # Optional heavy deps — imported lazily
 _pyarrow_available = False
@@ -53,11 +53,11 @@ except ImportError:
 # Config helpers
 # ---------------------------------------------------------------------------
 
-class LakehouseConfig:
+class Alternate StreamConfig:
     def __init__(self, raw: dict):
         self.enabled        = raw.get("enabled", False)
         self.destination    = raw.get("destination", "local-json").lower()
-        self.path           = raw.get("path", "/var/log/etairos/lakehouse")
+        self.path           = raw.get("path", "/var/log/etairos/alternate_stream")
         self.batch_size     = raw.get("batch_size", 1000)
         self.flush_interval = raw.get("flush_interval", 60)
         self.partition_by   = raw.get("partition_by", "day")  # day | hour | none
@@ -82,20 +82,20 @@ class LakehouseConfig:
             if not _boto3_available:
                 raise RuntimeError("destination=s3 requires boto3. pip install boto3")
             if not self.s3_bucket:
-                raise ValueError("output.lakehouse.s3.bucket is required for destination=s3")
+                raise ValueError("output.alternate_stream.s3.bucket is required for destination=s3")
 
 
 # ---------------------------------------------------------------------------
 # Writer base
 # ---------------------------------------------------------------------------
 
-class LakehouseWriter:
+class Alternate StreamWriter:
     """
     Receives decoded Splunk field dicts from the agent, maps them to OCSF,
     and flushes batches to the configured destination.
     """
 
-    def __init__(self, cfg: LakehouseConfig, shutdown_event: threading.Event):
+    def __init__(self, cfg: Alternate StreamConfig, shutdown_event: threading.Event):
         self.cfg = cfg
         self._shutdown = shutdown_event
         self._q: queue.Queue = queue.Queue(maxsize=500_000)
@@ -104,9 +104,9 @@ class LakehouseWriter:
         self._last_flush = time.monotonic()
 
         # Start background flush thread
-        t = threading.Thread(target=self._run, daemon=True, name="lakehouse-writer")
+        t = threading.Thread(target=self._run, daemon=True, name="alternate_stream-writer")
         t.start()
-        log.info(f"LakehouseWriter started: destination={cfg.destination} "
+        log.info(f"Alternate StreamWriter started: destination={cfg.destination} "
                  f"batch_size={cfg.batch_size} flush_interval={cfg.flush_interval}s")
 
     def write(self, splunk_fields: dict):
@@ -114,7 +114,7 @@ class LakehouseWriter:
         try:
             self._q.put_nowait(splunk_fields)
         except queue.Full:
-            log.warning("Lakehouse queue full — dropping event")
+            log.warning("Alternate Stream queue full — dropping event")
 
     def _run(self):
         while not self._shutdown.is_set():
@@ -169,9 +169,9 @@ class LakehouseWriter:
             else:
                 log.error(f"Unknown destination: {dest}")
         except Exception as e:
-            log.error(f"Lakehouse flush failed ({dest}): {e}")
+            log.error(f"Alternate Stream flush failed ({dest}): {e}")
 
-        log.info(f"Lakehouse: flushed {len(ocsf_events)} events -> {dest}")
+        log.info(f"Alternate Stream: flushed {len(ocsf_events)} events -> {dest}")
 
     # -----------------------------------------------------------------------
     # Partition path helper
@@ -279,7 +279,7 @@ def _events_to_arrow(events: list):
     """
     Convert list of OCSF dicts to a pyarrow Table.
     Nested dicts are JSON-stringified (Parquet supports nested via structs,
-    but JSON strings are simpler for initial lakehouse ingestion — easy to
+    but JSON strings are simpler for initial alternate_stream ingestion — easy to
     evolve to nested structs later).
     """
     if not events:

@@ -22,12 +22,12 @@ forward:
     queue_max: 100000
     reconnect_delay: 2
 
-lakehouse:
+alternate_stream:
   enabled: true
   destination: "local-json"   # local-json | local-parquet | s3
   
   # Local path (use forward slashes even on Windows)
-  path: "/var/log/etairos/lakehouse"
+  path: "/var/log/etairos/alternate_stream"
   
   # S3 settings
   s3:

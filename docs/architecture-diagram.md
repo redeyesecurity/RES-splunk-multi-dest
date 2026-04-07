@@ -97,12 +97,12 @@
 │   ───────────   │   │   ───────────   ││   │   ───────────   │   │   ───────────   │
 │                 │   │                 ││   │                 │   │                 │
 │   FORWARD TO    │   │   LOCAL FILE    ││   │   LOCAL         │   │   S3 PARQUET    │
-│   SPLUNK        │   │   (decoded)     ││   │   PARQUET/JSON  │   │   LAKEHOUSE     │
+│   SPLUNK        │   │   (decoded)     ││   │   PARQUET/JSON  │   │   ALTERNATE_STREAM     │
 │                 │   │                 ││   │                 │   │                 │
 │   Raw S2S       │   │   events.log    ││   │   OCSF format   │   │   OCSF format   │
 │   passthrough   │   │   one-liner     ││   │   Hive partitions│  │   Hive partitions│
 │                 │   │   per event     ││   │                 │   │                 │
-│   forward:      │   │   output:       ││   │   lakehouse:    │   │   lakehouse:    │
+│   forward:      │   │   output:       ││   │   alternate_stream:    │   │   alternate_stream:    │
 │     enabled:    │   │     file:       ││   │     dest: local │   │     dest: s3    │
 │     true        │   │     /var/log/.. ││   │     -parquet    │   │                 │
 │                 │   │                 ││   │                 │   │                 │
@@ -115,7 +115,7 @@
 │  INDEXER        │   │                 ││   │                 │   │                                 │
 │                 │   │  /var/log/      ││   │  /var/log/      │   │  s3://bucket/prefix/            │
 │  (unchanged     │   │  etairos/       ││   │  etairos/       │   │    class_uid=4002/              │
-│   data flow)    │   │  events.log     ││   │  lakehouse/     │   │      year=2026/                 │
+│   data flow)    │   │  events.log     ││   │  alternate_stream/     │   │      year=2026/                 │
 │                 │   │                 ││   │    class_uid=   │   │        month=04/                │
 │                 │   │  Format:        ││   │      4002/      │   │          day=07/                │
 │                 │   │  [ts] host=     ││   │      year=      │   │            *.parquet            │
@@ -172,21 +172,21 @@
 │                     │             │          └──────────────┘                                           │
 │                     │             │                                                                      │
 │                     │             │───OCSF───►┌──────────────┐                                          │
-│                     └─────────────┘           │   Lakehouse  │   ◄── Test lakehouse pipeline            │
+│                     └─────────────┘           │   Alternate Stream  │   ◄── Test alternate_stream pipeline            │
 │                                               └──────────────┘                                           │
 │                                                                                                          │
-│   Config:  forward.enabled: true  |  lakehouse.enabled: true                                            │
+│   Config:  forward.enabled: true  |  alternate_stream.enabled: true                                            │
 │   Risk:    Zero — agent is transparent tee                                                               │
 │                                                                                                          │
 │                                                                                                          │
-│   OPTION B: Lakehouse Only (Post-Migration)                                                             │
+│   OPTION B: Alternate Stream Only (Post-Migration)                                                             │
 │   ──────────────────────────────────────────                                                            │
 │                                                                                                          │
 │   ┌──────┐          ┌─────────────┐          ┌──────────────┐                                           │
-│   │  UF  │ ───S2S──►│   Agent     │───OCSF──►│   Lakehouse  │   ◄── All events to lakehouse            │
+│   │  UF  │ ───S2S──►│   Agent     │───OCSF──►│   Alternate Stream  │   ◄── All events to alternate_stream            │
 │   └──────┘          └─────────────┘          └──────────────┘                                           │
 │                                                                                                          │
-│   Config:  forward.enabled: false  |  lakehouse.enabled: true                                           │
+│   Config:  forward.enabled: false  |  alternate_stream.enabled: true                                           │
 │   Risk:    Low — rollback = repoint UF at indexer                                                        │
 │                                                                                                          │
 │                                                                                                          │
@@ -195,7 +195,7 @@
 │                                                                                                          │
 │   ┌──────┐          ┌─────────────┐          ┌──────────────┐                                           │
 │   │  UF  │ ──┬─────►│  Agent 1    │───OCSF──►│              │                                           │
-│   └──────┘   │      └─────────────┘          │   Lakehouse  │                                           │
+│   └──────┘   │      └─────────────┘          │   Alternate Stream  │                                           │
 │              │                               │   (S3)       │                                           │
 │              │      ┌─────────────┐          │              │                                           │
 │              └─────►│  Agent 2    │───OCSF──►│              │   ◄── Load balancer / DNS RR              │
@@ -212,7 +212,7 @@
 │   │          ON-PREM DATACENTER        │     │              AWS / CLOUD           │                     │
 │   │                                    │     │                                    │                     │
 │   │  ┌──────┐     ┌─────────────┐      │     │      ┌─────────────────────────┐   │                     │
-│   │  │  UF  │────►│   Agent     │──────┼─────┼─────►│   S3 Lakehouse          │   │                     │
+│   │  │  UF  │────►│   Agent     │──────┼─────┼─────►│   S3 Alternate Stream          │   │                     │
 │   │  └──────┘     │  (local)    │      │     │      │   (cross-account OK)    │   │                     │
 │   │               └─────────────┘      │     │      └─────────────────────────┘   │                     │
 │   │                     │              │     │                                    │                     │
@@ -224,8 +224,8 @@
 │   │                                    │     │                                    │                     │
 │   └────────────────────────────────────┘     └────────────────────────────────────┘                     │
 │                                                                                                          │
-│   Config:  lakehouse.destination: s3  |  output.file: /local/backup                                     │
-│   Benefit: Local backup + cloud lakehouse                                                                │
+│   Config:  alternate_stream.destination: s3  |  output.file: /local/backup                                     │
+│   Benefit: Local backup + cloud alternate_stream                                                                │
 │                                                                                                          │
 └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
@@ -272,13 +272,13 @@
 │   └──────┘     │             │                 └──────────────┘                                          │
 │                │             │                                                                           │
 │                │             │───OCSF───►┌──────────────┐                                               │
-│                └─────────────┘           │   Lakehouse  │   ◄── Events still flow here                  │
+│                └─────────────┘           │   Alternate Stream  │   ◄── Events still flow here                  │
 │                                          └──────────────┘                                                │
 │                                                                                                          │
 │   • Frames to indexer are DROPPED                                                                        │
-│   • Lakehouse and local file continue receiving events                                                   │
+│   • Alternate Stream and local file continue receiving events                                                   │
 │   • UF receives ACKs — no buffering                                                                      │
-│   • Use case: lakehouse is primary, Splunk is optional                                                   │
+│   • Use case: alternate_stream is primary, Splunk is optional                                                   │
 │                                                                                                          │
 │                                                                                                          │
 │   FAIL-CLOSED:                                                                                           │
@@ -291,7 +291,7 @@
 │                │  100K max   │                        │ (reconnect loop)                                 │
 │                │             │                        ▼                                                  │
 │                │             │───OCSF───►┌──────────────┐                                               │
-│                └─────────────┘           │   Lakehouse  │   ◄── Events still flow here                  │
+│                └─────────────┘           │   Alternate Stream  │   ◄── Events still flow here                  │
 │                                          └──────────────┘                                                │
 │                                                                                                          │
 │   • Frames queued in memory (up to queue_max)                                                            │
@@ -307,13 +307,13 @@
 
 | Goal | Config |
 |------|--------|
-| **Shadow mode** (test lakehouse, keep Splunk) | `forward.enabled: true`, `lakehouse.enabled: true` |
-| **Lakehouse only** | `forward.enabled: false`, `lakehouse.enabled: true` |
-| **Local files only** (debugging) | `forward.enabled: false`, `lakehouse.enabled: false`, `output.file: /path` |
-| **Splunk passthrough** (just decode) | `forward.enabled: true`, `lakehouse.enabled: false` |
-| **S3 lakehouse** | `lakehouse.destination: s3`, fill `lakehouse.s3.*` |
-| **Local Parquet** | `lakehouse.destination: local-parquet` |
-| **Local JSON** | `lakehouse.destination: local-json` |
+| **Shadow mode** (test alternate_stream, keep Splunk) | `forward.enabled: true`, `alternate_stream.enabled: true` |
+| **Alternate Stream only** | `forward.enabled: false`, `alternate_stream.enabled: true` |
+| **Local files only** (debugging) | `forward.enabled: false`, `alternate_stream.enabled: false`, `output.file: /path` |
+| **Splunk passthrough** (just decode) | `forward.enabled: true`, `alternate_stream.enabled: false` |
+| **S3 alternate_stream** | `alternate_stream.destination: s3`, fill `alternate_stream.s3.*` |
+| **Local Parquet** | `alternate_stream.destination: local-parquet` |
+| **Local JSON** | `alternate_stream.destination: local-json` |
 | **TLS everywhere** | `listener.tls.enabled: true`, `forward.tls.enabled: true` |
 | **Fail-closed** | `forward.failover.mode: fail-closed` |
 

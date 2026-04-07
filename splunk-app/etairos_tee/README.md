@@ -2,7 +2,7 @@
 
 **S2S tee proxy that runs inside your Splunk Universal Forwarder.**
 
-Intercepts UF output, forwards to your indexer unchanged, and simultaneously writes OCSF-formatted events to your lakehouse (S3, local Parquet, or local JSON).
+Intercepts UF output, forwards to your indexer unchanged, and simultaneously writes OCSF-formatted events to your alternate_stream (S3, local Parquet, or local JSON).
 
 ## Why run inside the UF?
 
@@ -27,7 +27,7 @@ Intercepts UF output, forwards to your indexer unchanged, and simultaneously wri
 │           ▼                │  • Receives S2S from UF            │  │
 │  ┌──────────────────┐      │  • Forwards to real indexer        │  │
 │  │  outputs.conf    │      │  • Maps to OCSF                    │  │
-│  │  server=127.0.0.1│─────►│  • Writes to lakehouse             │  │
+│  │  server=127.0.0.1│─────►│  • Writes to alternate_stream             │  │
 │  │  :19997          │      │                                    │  │
 │  └──────────────────┘      └──────────────┬─────────────────────┘  │
 │                                           │                        │
@@ -40,7 +40,7 @@ Intercepts UF output, forwards to your indexer unchanged, and simultaneously wri
                     │                       │                       │
                     ▼                       ▼                       ▼
           ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
-          │  Splunk Indexer  │   │  Local Parquet   │   │  S3 Lakehouse    │
+          │  Splunk Indexer  │   │  Local Parquet   │   │  S3 Alternate Stream    │
           │  (unchanged)     │   │  /var/log/...    │   │  s3://bucket/... │
           └──────────────────┘   └──────────────────┘   └──────────────────┘
 ```
@@ -98,7 +98,7 @@ forward:
   tls:
     enabled: false
 
-lakehouse:
+alternate_stream:
   enabled: true
   destination: "s3"             # s3 | local-parquet | local-json
   s3:
@@ -114,8 +114,8 @@ lakehouse:
 | Destination | Dependencies | Use case |
 |-------------|--------------|----------|
 | `local-json` | None | Testing, small deployments |
-| `local-parquet` | pyarrow | Local lakehouse, NAS |
-| `s3` | pyarrow, boto3 | Cloud lakehouse |
+| `local-parquet` | pyarrow | Local alternate_stream, NAS |
+| `s3` | pyarrow, boto3 | Cloud alternate_stream |
 
 ### Installing dependencies
 
