@@ -207,13 +207,14 @@ C:\Program Files\SplunkUniversalForwarder\var\log\splunk\etairos_tee.log
 ### Running standalone
 
 ```bash
+cd standalone/
 python3 agent.py --config config.yaml
 ```
 
 Or as a systemd service:
 ```bash
-sudo cp agent.py ocsf_mapper.py alternate_stream_writer.py ack_handler.py config.yaml \
-    /opt/etairos-log-agent/
+sudo cp -r standalone/ /opt/etairos-log-agent/
+sudo cp standalone/etairos-log-agent.service /etc/systemd/system/
 sudo systemctl enable --now etairos-log-agent
 ```
 
@@ -271,24 +272,28 @@ autoLB = true
 ```
 etairos-log-agent/
 ├── splunk-app/
-│   └── etairos_tee/            # Primary deployment
+│   └── etairos_tee/                 # Primary deployment — deploy this
 │       ├── default/
 │       │   ├── app.conf
-│       │   ├── inputs.conf     # Starts listener + monitors logs
-│       │   ├── outputs.conf    # Routes UF to local listener
-│       │   ├── props.conf      # Log parsing
-│       │   └── config.yaml     # All configuration (with full destination reference)
-│       ├── local/              # Your overrides go here
+│       │   ├── inputs.conf          # Starts listener + monitors logs
+│       │   ├── outputs.conf         # Routes UF to local listener
+│       │   ├── props.conf           # Log parsing
+│       │   └── config.yaml          # All configuration (full destination reference)
+│       ├── local/                   # Your overrides go here (gitignored)
 │       ├── bin/
-│       │   ├── start_listener.py   # Splunk scripted input entry point
-│       │   ├── listener.py         # S2S tee logic
-│       │   └── ocsf_mapper.py      # OCSF conversion
-│       └── lib/                # Vendored dependencies (pyarrow, boto3, etc.)
-├── agent.py                    # Standalone entry point
-├── ocsf_mapper.py
-├── alternate_stream_writer.py
-├── ack_handler.py
-├── config.yaml                 # Standalone config
+│       │   ├── start_listener.py    # Splunk scripted input entry point
+│       │   ├── listener.py          # S2S tee logic
+│       │   ├── ocsf_mapper.py       # OCSF conversion
+│       │   ├── alternate_stream_writer.py  # Destination writers
+│       │   └── ack_handler.py       # Fake S2S ACK responder
+│       └── lib/                     # Vendored dependencies (pyarrow, boto3, etc.)
+├── standalone/                      # Advanced: run without Splunk
+│   ├── agent.py                     # Entry point
+│   ├── config.yaml
+│   ├── ocsf_mapper.py
+│   ├── alternate_stream_writer.py
+│   ├── ack_handler.py
+│   └── etairos-log-agent.service    # systemd unit
 └── docs/
     └── architecture-diagram.md
 ```
