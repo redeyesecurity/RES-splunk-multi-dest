@@ -19,7 +19,7 @@ Sits transparently between your Splunk Universal Forwarders and indexers. Receiv
                                   │  • Map to OCSF v1.1           │
                                   │  • Write Parquet / JSON       │
                                   │  • Forward raw to indexer     │
-                                  │  • Send fake ACKs to UF       │
+                                  │  • Send fake ACKs to UF ( optional )      │
                                   └───────────────────────────────┘
                                               │
                                               ▼
@@ -31,11 +31,11 @@ Sits transparently between your Splunk Universal Forwarders and indexers. Receiv
 
 ## Why?
 
-- **Splunk migration**: Test your lakehouse pipeline without touching production Splunk
-- **Dual-write during transition**: Send to both Splunk and lakehouse simultaneously
+- **Splunk migration**: Test your alternate data stream pipeline without touching production Splunk
+- **Dual-write during transition**: Send to both Splunk and alternate data stream simultaneously
 - **No Splunk license required**: The agent is pure Python, no Splunk components
 - **OCSF standardization**: Convert proprietary Splunk formats to open OCSF schema
-- **Zero UF changes**: Just update `outputs.conf` to point at the agent
+- **Zero UF changes**: Just update `outputs.conf` to point at the agent OR host specific hosts file overwrite for single host testing.
 
 ## Features
 
