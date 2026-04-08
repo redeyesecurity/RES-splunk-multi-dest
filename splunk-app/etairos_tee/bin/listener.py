@@ -356,7 +356,7 @@ class TeeListener:
                 idx = 0
                 # Try to find \xa1\x01 event markers
                 # All known S2S v3 event start markers
-                _markers = [bytes.fromhex(x) for x in ("a101","ca01","ca05","c101","c105","fe01","c1")]
+                _markers = [bytes.fromhex(x) for x in ("a101","ca01","ca05","c101","c105","fe01","c1","b9","b7","ba","bb")]
                 # Find first occurrence of any marker and use the most common one
                 marker = bytes.fromhex("a101")
                 _best_count = 0
