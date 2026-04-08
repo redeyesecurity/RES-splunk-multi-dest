@@ -330,3 +330,15 @@
 | `auditd`, `linux:audit` | File System Activity (1001) |
 | `snort`, `suricata`, `crowdstrike` | Security Finding (2001) |
 | Everything else | Unknown (0) |
+
+## Live Dashboard Screenshot
+
+Grafana dashboard showing S2S v3 decoded events in real-time:
+
+![Grafana S2S v3 Dashboard](grafana-dashboard-screenshot.png)
+
+**Panels:**
+- **Total Events / Unique Sources / Unique Hosts / Protocol** — top-level stats
+- **Events per Minute** — bar chart, one bar per minute
+- **Events by Source** — breakdown by source log file path
+- **Recent Events (Live)** — decoded log lines teed from the UF in real time
