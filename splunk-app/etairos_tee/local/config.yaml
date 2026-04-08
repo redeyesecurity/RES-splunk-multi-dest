@@ -1,0 +1,18 @@
+listener:
+  host: "127.0.0.1"
+  port: 19997
+
+forward:
+  enabled: false
+
+alternate_stream:
+  enabled: true
+  destination: "local-json"
+  path: "/Users/mattt/etairos-events"
+  partition_by: "hour"
+  batch_size: 100
+  flush_interval: 30
+
+logging:
+  level: "INFO"
+  log_every_n: 100

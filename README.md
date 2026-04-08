@@ -295,8 +295,26 @@ etairos-log-agent/
 │   ├── ack_handler.py
 │   └── etairos-log-agent.service    # systemd unit
 └── docs/
-    └── architecture-diagram.md
+    ├── architecture-diagram.md
+    ├── S2S-PROTOCOL-V3.md           # Wire protocol reverse engineering
+    └── IMPLEMENTATION-NOTES.md      # Listener implementation details
 ```
+
+## Protocol Documentation
+
+The S2S v3 protocol was reverse-engineered from packet captures. See:
+
+- **[S2S-PROTOCOL-V3.md](docs/S2S-PROTOCOL-V3.md)** — Complete wire format documentation
+- **[IMPLEMENTATION-NOTES.md](docs/IMPLEMENTATION-NOTES.md)** — Listener implementation details
+
+### Quick Protocol Summary
+
+1. **Hello** (UF → IX): 400-byte fixed struct with hostname/port
+2. **Capabilities** (UF → IX): Variable-length frame ending with `\x00\x00\x00\x05_raw\x00`
+3. **Control Response** (IX → UF): 163-byte canned response
+4. **Event Stream** (UF → IX): Channel-multiplexed data, NOT 8-byte framed
+
+Key insight: Events are in `_MetaData:Index` channel segments, marked with `\xa1\x01` or `\xca\x05` bytes.
 
 ## License
 
