@@ -562,6 +562,7 @@ class TeeListener:
         with open(filepath, "w") as f:
             for event in self.alternate_stream_batch:
                 f.write(json.dumps(event) + "\n")
+        import os; os.chmod(str(filepath), 0o644)
         self.logger.info(f"Wrote {filepath}")
     
     def _write_local_parquet(self):

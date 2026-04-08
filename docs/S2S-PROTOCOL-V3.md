@@ -421,6 +421,31 @@ or you want to implement a simpler parser for the tee side).
 
 ---
 
+## Additional Event Markers (Observed April 2026)
+
+During extended capture with UF 9.4.3 (Darwin arm64), additional single-byte markers
+were observed in the `_MetaData:Index` channel beyond the originally documented set:
+
+| Marker | Hex | Context |
+|--------|-----|---------|
+| `\xa1\x01` | `a101` | Originally documented — splunkd.log events |
+| `\xca\x01` | `ca01` | Originally documented — splunkd.log events |
+| `\xca\x05` | `ca05` | Originally documented — etairos_tee.log events |
+| `\xc1\x01` | `c101` | Originally documented — mixed events |
+| `\xb9` | `b9` | **New** — metrics.log events |
+| `\xb7` | `b7` | **New** — splunkd.log events |
+| `\xba` | `ba` | **New** — mixed event segments |
+| `\xbb` | `bb` | **New** — mixed event segments |
+
+**Key finding:** These single-byte markers (`b7`-`bb` range) encode event boundaries
+but do NOT encode length. The log text follows immediately after the marker byte.
+
+The "most common marker in segment" heuristic handles all cases: scan the segment
+for all known markers, use whichever appears most frequently, then split on it.
+
+Without `b9`/`b7`/`ba`/`bb` in the marker list, the parser finds 0 events (all
+connections show `Connection done total_bytes=NNN remaining_buf=208` with no flushes).
+
 ## References
 
 - Splunk docs: https://docs.splunk.com/Documentation/Splunk/latest/Admin/Outputsconf
