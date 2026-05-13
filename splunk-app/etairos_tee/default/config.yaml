@@ -41,7 +41,7 @@ alternate_stream:
       path: "/var/log/etairos/parquet"
       partition_by: "day"
     
-    - type: "s3"              # AWS S3 / MinIO / R2
+    - type: "s3"              # AWS S3 / MinIO / R2 / Wasabi
       enabled: false
       bucket: ""
       prefix: "etairos/ocsf"
@@ -49,6 +49,10 @@ alternate_stream:
       access_key: ""          # blank = use IAM role / env vars
       secret_key: ""
       partition_by: "day"
+      # S3-compatible store overrides. Leave blank/default for AWS S3.
+      endpoint_url: ""        # e.g. "http://minio.local:9000" for MinIO
+      verify_ssl: true        # false to skip cert verify (self-signed dev MinIO)
+      addressing_style: "auto" # "path" for MinIO/Wasabi, "virtual" for AWS, "auto" picks
     
     - type: "kafka"           # Kafka / Confluent / Redpanda
       enabled: false

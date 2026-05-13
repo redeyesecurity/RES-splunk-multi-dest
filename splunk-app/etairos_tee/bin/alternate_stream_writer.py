@@ -64,11 +64,14 @@ class AlternateStreamConfig:
 
         # S3
         s3 = raw.get("s3") or {}
-        self.s3_bucket      = s3.get("bucket", "")
-        self.s3_prefix      = s3.get("prefix", "etairos/ocsf/")
-        self.s3_region      = s3.get("region", "us-east-1")
-        self.s3_access_key  = s3.get("access_key", "")
-        self.s3_secret_key  = s3.get("secret_key", "")
+        self.s3_bucket           = s3.get("bucket", "")
+        self.s3_prefix           = s3.get("prefix", "etairos/ocsf/")
+        self.s3_region           = s3.get("region", "us-east-1")
+        self.s3_access_key       = s3.get("access_key", "")
+        self.s3_secret_key       = s3.get("secret_key", "")
+        self.s3_endpoint_url     = s3.get("endpoint_url", "") or None
+        self.s3_verify_ssl       = s3.get("verify_ssl", True)
+        self.s3_addressing_style = s3.get("addressing_style", "auto")
 
     def validate(self):
         if not self.enabled:
@@ -240,11 +243,15 @@ class AlternateStreamWriter:
 
     def _write_s3_parquet(self, events: list):
         import io
+        from botocore.config import Config
         s3_client = boto3.client(
             "s3",
             region_name=self.cfg.s3_region,
             aws_access_key_id=self.cfg.s3_access_key     or None,
             aws_secret_access_key=self.cfg.s3_secret_key or None,
+            endpoint_url=self.cfg.s3_endpoint_url,
+            verify=self.cfg.s3_verify_ssl,
+            config=Config(s3={"addressing_style": self.cfg.s3_addressing_style}),
             # If no keys provided, boto3 falls back to IAM role / env vars
         )
 

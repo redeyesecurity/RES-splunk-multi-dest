@@ -665,11 +665,15 @@ class TeeListener:
             pq.write_table(table, tmp.name)
             
             # Upload
+            from botocore.config import Config
             s3 = boto3.client(
                 "s3",
                 region_name=s3_config.get("region", "us-east-1"),
                 aws_access_key_id=s3_config.get("access_key") or None,
-                aws_secret_access_key=s3_config.get("secret_key") or None
+                aws_secret_access_key=s3_config.get("secret_key") or None,
+                endpoint_url=s3_config.get("endpoint_url") or None,
+                verify=s3_config.get("verify_ssl", True),
+                config=Config(s3={"addressing_style": s3_config.get("addressing_style", "auto")}),
             )
             s3.upload_file(tmp.name, bucket, key)
             

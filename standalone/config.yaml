@@ -80,9 +80,11 @@ alternate_stream:
       bucket: ""
       prefix: "etairos/ocsf"
       region: "us-east-1"
-      endpoint_url: ""        # For MinIO/R2: https://your-endpoint
+      endpoint_url: ""        # For MinIO/R2: http://minio.local:9000
       access_key: ""          # blank = IAM role / env vars
       secret_key: ""
+      verify_ssl: true        # false to skip cert verify (self-signed dev MinIO)
+      addressing_style: "auto" # "path" for MinIO/Wasabi, "virtual" for AWS
       partition_by: "day"
 
     # ---------------------------------------------------------------------------
