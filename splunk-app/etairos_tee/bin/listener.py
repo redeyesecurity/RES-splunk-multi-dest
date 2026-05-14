@@ -39,6 +39,55 @@ except ImportError:
     HAS_BOTO3 = False
 
 
+# Bytes that legitimately appear in log-line tails: ASCII printable plus
+# the standard whitespace controls. Anything else (control bytes < 0x20
+# except \t/\n/\r, the 0x7f DEL, and anything >= 0x80 that isn't a
+# UTF-8 continuation byte) is treated as S2S framing leakage.
+def _is_text_byte(b: int) -> bool:
+    if b == 0x09 or b == 0x0a or b == 0x0d:
+        return True
+    if 0x20 <= b <= 0x7e:
+        return True
+    # UTF-8 multi-byte sequences: lead bytes 0xc2-0xf4, continuation 0x80-0xbf.
+    # The lead byte check is conservative; continuation bytes are rejected
+    # as trailers in isolation because real log endings won't dangle on
+    # a continuation byte.
+    if 0xc2 <= b <= 0xf4:
+        return True
+    return False
+
+
+def _trim_s2s_trailer(raw_bytes: bytes) -> bytes:
+    """Strip trailing S2S framing leakage from an extracted event body.
+
+    Between two `\\xa1\\x01` event markers the segment contains:
+        <event text>\\n<S2S framing metadata>
+    where the framing metadata is varint + length-prefixed protobuf-ish
+    fields from the next event's envelope. Naive byte-class trimming
+    fails because the framing contains length-prefixed substrings that
+    look printable (e.g. `\\x03FE\\x06resent`).
+
+    The reliable boundary is the last `\\n` whose following byte is
+    non-text — that's where a real log line ends and the next event's
+    framing begins. If no such boundary exists, fall back to trimming
+    a non-text suffix.
+    """
+    if not raw_bytes:
+        return raw_bytes
+    for i in range(len(raw_bytes) - 1, -1, -1):
+        if raw_bytes[i] == 0x0a:  # \n
+            after = raw_bytes[i + 1:]
+            if not after:
+                return raw_bytes  # ends cleanly with \n, nothing to strip
+            if not _is_text_byte(after[0]):
+                return raw_bytes[:i + 1]
+    # No \n delimiter — strip any non-text suffix.
+    end = len(raw_bytes)
+    while end > 0 and not _is_text_byte(raw_bytes[end - 1]):
+        end -= 1
+    return raw_bytes[:end]
+
+
 class TeeListener:
     """Main S2S tee proxy listener"""
     
@@ -422,13 +471,7 @@ class TeeListener:
                     if event_end == -1:
                         event_end = len(segment)
                     raw_bytes = segment[m+2:event_end]
-                    # Trim trailing binary metadata (everything after the last newline before control bytes)
-                    # Find last printable newline position
-                    last_nl = raw_bytes.rfind(b"\n")
-                    if last_nl > 0:
-                        tail = raw_bytes[last_nl+1:]
-                        if tail and tail[0] in (0xc1, 0xca, 0xfe, 0xff, 0xa1, 0x1a, 0x1c):
-                            raw_bytes = raw_bytes[:last_nl+1]
+                    raw_bytes = _trim_s2s_trailer(raw_bytes)
                     raw_text = raw_bytes.rstrip(b"\x00").decode("utf-8", errors="replace").strip()
                     if raw_text:
                         # Clean source path: strip leading fragment (channel re-use artifact)
