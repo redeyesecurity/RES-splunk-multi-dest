@@ -128,13 +128,19 @@ class TeeListener:
         self.alternate_stream_batch = []
         self.last_flush = time.time()
         
-        # Import OCSF mapper
-        try:
-            from ocsf_mapper import OCSFMapper
-            self.mapper = OCSFMapper()
-        except ImportError:
-            self.logger.warning("ocsf_mapper not found, OCSF mapping disabled")
-            self.mapper = None
+        # OCSF mapping. The ocsf_mapper module exposes `to_ocsf(fields)`
+        # as its public API; there is no class to instantiate (that was
+        # the prior bug). Mapping is opt-in via `ocsf.enabled: true` in
+        # config because the OCSF dict has nested empty structs that
+        # pyarrow can't serialize to Parquet without a schema overhaul.
+        self.mapper = None
+        if config.get("ocsf", {}).get("enabled"):
+            try:
+                from ocsf_mapper import to_ocsf
+                self.mapper = to_ocsf
+                self.logger.info("OCSF mapping enabled")
+            except ImportError as e:
+                self.logger.warning(f"ocsf_mapper import failed: {e}; OCSF disabled")
 
         # ACK configuration
         if HAS_ACK:
@@ -304,8 +310,10 @@ class TeeListener:
                             _sf.write(raw_buf[:32768])
                         self.logger.info(f"Stream dump written: {min(len(raw_buf),4096)} bytes")
                         stream_dumped = True
-                    # Parse complete S2S frames from the buffer
-                    raw_buf, events = self._parse_s2s_stream(raw_buf)
+                    # Parse complete S2S frames from the buffer. Use the
+                    # hostname captured in the S2S v3 handshake so events
+                    # carry the real forwarder name instead of a placeholder.
+                    raw_buf, events = self._parse_s2s_stream(raw_buf, host=client_hostname)
                     for event in events:
                         self.stats["events_received"] += 1
                         self.event_queue.put(event)
@@ -377,7 +385,7 @@ class TeeListener:
             self.logger.error(f"Failed to connect to indexer: {e}")
             return None
     
-    def _parse_s2s_stream(self, buf: bytes):
+    def _parse_s2s_stream(self, buf: bytes, host: str = ""):
         """
         Parse S2S v3 cooked event stream (wire-observed format).
 
@@ -392,6 +400,9 @@ class TeeListener:
 
         Events are extracted from _MetaData:Index channel segments, which have:
           4-byte index_name_len + index_name + \xa1\x01 + log_line_text
+
+        `host` is the forwarder hostname captured during the S2S v3
+        handshake; it's stamped onto each emitted event's `host` field.
 
         Returns (remaining_buf, list_of_event_dicts)
         """
@@ -458,6 +469,8 @@ class TeeListener:
                     last_path = raw_path[unix_slash:]
                 else:
                     last_path = raw_path
+                # Collapse `//opt/...` / `///` runs from the unix-slash slice.
+                last_path = re.sub(r"^/+", "/", last_path)
             elif chan == "_MetaData:Index" and len(segment) > 6:
                 # Format: 4-byte index_len + index_name + \xa1\x01 + log_text
                 # Or sometimes: just \xa1\x01 + log_text (no index prefix)
@@ -511,7 +524,7 @@ class TeeListener:
                                     events.append({
                                         "_time": time.time(),
                                         "_raw": chunk,
-                                        "host": "Mac.hostname",
+                                        "host": host or "unknown",
                                         "source": src_path,
                                         "sourcetype": "splunkd",
                                         "index": last_index,
@@ -603,7 +616,7 @@ class TeeListener:
                     
                     # Map to OCSF if mapper available
                     if self.mapper:
-                        ocsf_event = self.mapper.map(event)
+                        ocsf_event = self.mapper(event)
                     else:
                         ocsf_event = event
                     

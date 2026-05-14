@@ -1,9 +1,39 @@
+import logging
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "splunk-app" / "etairos_tee" / "bin"))
 
-from listener import _trim_s2s_trailer, _is_text_byte, _scan_first_non_text
+import listener as listener_module
+from listener import _trim_s2s_trailer, _is_text_byte, _scan_first_non_text, TeeListener
+
+
+def _make_listener():
+    return TeeListener({"ack": {"enabled": False}, "alternate_stream": {"enabled": False}},
+                       logging.getLogger("test"))
+
+
+def _build_path_then_event_segment(path: bytes, event_text: bytes) -> bytes:
+    """Build a tiny S2S-style buffer with a _path channel + _MetaData:Index
+    channel carrying one `\\xa1\\x01` event.
+
+    The parser scans byte-by-byte for the next channel header and aborts
+    early when a byte in 1..32 (interpreted as a length) would overrun
+    the buffer. Real streams are long enough that this only ever truncates
+    cleanly. To replicate that in tests, pad with a second `_path`/
+    `_MetaData:Index`/`_raw` triple after the event so the scan can find
+    a real next-channel marker."""
+    def chan(name: bytes, payload: bytes) -> bytes:
+        return bytes([len(name)]) + name + payload
+    return (
+        chan(b"_path", path)
+        + chan(b"_MetaData:Index", b"\xa1\x01" + event_text)
+        + chan(b"_raw", b"")
+        + chan(b"_path", b"/x")
+        + chan(b"_MetaData:Index", b"")
+        + chan(b"_raw", b"")
+        + b"\x00" * 64
+    )
 
 
 def test_strip_protobuf_style_tail_with_newline_boundary():
@@ -92,3 +122,82 @@ def test_scan_first_non_text_clean():
 def test_scan_first_non_text_finds_first_garbage():
     body = b"abc\x00def\x01"
     assert _scan_first_non_text(body) == 3
+
+
+# --- regression tests for #7, #8, #9 ---------------------------------------
+
+
+def test_ocsf_mapper_default_disabled():
+    """#7: by default the mapper is None (raw flat events), but importing
+    no longer raises a spurious warning."""
+    tl = _make_listener()
+    assert tl.mapper is None
+
+
+def test_ocsf_mapper_opt_in_via_config():
+    """#7: when config sets ocsf.enabled=true, the import path works."""
+    tl = TeeListener(
+        {"ack": {"enabled": False}, "alternate_stream": {"enabled": False},
+         "ocsf": {"enabled": True}},
+        logging.getLogger("test"),
+    )
+    assert tl.mapper is not None
+    assert callable(tl.mapper)
+    out = tl.mapper({"_time": 1.0, "_raw": "x", "sourcetype": "syslog"})
+    assert isinstance(out, dict)
+    assert "class_uid" in out  # OCSF base record always has class_uid
+
+
+def test_event_host_uses_handshake_host_not_hardcoded():
+    """#8: host must come from the S2S handshake, not 'Mac.hostname'."""
+    tl = _make_listener()
+    segment = _build_path_then_event_segment(
+        path=b"\x05/var/log/syslog",
+        event_text=b"05-14-2026 12:00:00 hello world\n",
+    )
+    _, events = tl._parse_s2s_stream(segment, host="lima-splunk-uf")
+    assert events, "should parse at least one event"
+    for ev in events:
+        assert ev["host"] == "lima-splunk-uf"
+        assert ev["host"] != "Mac.hostname"
+
+
+def test_event_host_falls_back_when_handshake_empty():
+    """#8 edge: when the handshake yielded no name, don't crash; default sensibly."""
+    tl = _make_listener()
+    segment = _build_path_then_event_segment(
+        path=b"\x05/var/log/syslog",
+        event_text=b"05-14-2026 12:00:00 hello\n",
+    )
+    _, events = tl._parse_s2s_stream(segment, host="")
+    assert events
+    assert all(ev["host"] == "unknown" for ev in events)
+
+
+def test_source_collapses_leading_double_slash():
+    """#9: /path/from/_path/channel must not produce //path in events."""
+    tl = _make_listener()
+    # The _path stream from UF sometimes carries an extra leading byte that
+    # leaves us with '//opt/...' after the slice; the fix collapses that
+    # to a single '/'.
+    segment = _build_path_then_event_segment(
+        path=b"X//opt/splunkforwarder/var/log/splunk/metrics.log",
+        event_text=b"05-14-2026 12:00:00 metrics event line one\n",
+    )
+    _, events = tl._parse_s2s_stream(segment, host="h")
+    assert events
+    for ev in events:
+        assert ev["source"].startswith("/opt/"), f"unexpected source={ev['source']!r}"
+        assert "//" not in ev["source"], f"leading // not collapsed: {ev['source']!r}"
+
+
+def test_source_preserves_single_slash_path():
+    """#9: don't break already-correct paths."""
+    tl = _make_listener()
+    segment = _build_path_then_event_segment(
+        path=b"/var/log/syslog",
+        event_text=b"05-14-2026 12:00:00 ok\n",
+    )
+    _, events = tl._parse_s2s_stream(segment, host="h")
+    assert events
+    assert all(ev["source"] == "/var/log/syslog" for ev in events)
