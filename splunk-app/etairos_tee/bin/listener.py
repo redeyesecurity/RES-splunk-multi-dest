@@ -39,53 +39,70 @@ except ImportError:
     HAS_BOTO3 = False
 
 
-# Bytes that legitimately appear in log-line tails: ASCII printable plus
-# the standard whitespace controls. Anything else (control bytes < 0x20
-# except \t/\n/\r, the 0x7f DEL, and anything >= 0x80 that isn't a
-# UTF-8 continuation byte) is treated as S2S framing leakage.
 def _is_text_byte(b: int) -> bool:
+    """Single-byte text classifier: ASCII printable or std whitespace.
+    UTF-8 multi-byte sequences are handled by _scan_first_non_text, which
+    tracks lead/continuation state — DO NOT use this for that.
+    """
     if b == 0x09 or b == 0x0a or b == 0x0d:
         return True
     if 0x20 <= b <= 0x7e:
         return True
-    # UTF-8 multi-byte sequences: lead bytes 0xc2-0xf4, continuation 0x80-0xbf.
-    # The lead byte check is conservative; continuation bytes are rejected
-    # as trailers in isolation because real log endings won't dangle on
-    # a continuation byte.
-    if 0xc2 <= b <= 0xf4:
-        return True
     return False
+
+
+def _scan_first_non_text(raw_bytes: bytes) -> int:
+    """Forward-scan for the first byte that isn't part of a valid
+    text payload. Accepts ASCII printable + std whitespace + valid
+    UTF-8 multi-byte sequences (RFC 3629; rejects overlong, 0xc0/0xc1,
+    and surrogate ranges). Returns len(raw_bytes) when all is text.
+    """
+    n = len(raw_bytes)
+    i = 0
+    while i < n:
+        b = raw_bytes[i]
+        if b == 0x09 or b == 0x0a or b == 0x0d or (0x20 <= b <= 0x7e):
+            i += 1
+            continue
+        # UTF-8 multi-byte lead bytes (RFC 3629 valid range)
+        if 0xc2 <= b <= 0xdf:
+            need = 1
+        elif 0xe0 <= b <= 0xef:
+            need = 2
+        elif 0xf0 <= b <= 0xf4:
+            need = 3
+        else:
+            return i  # 0xc0/0xc1/0xf5-0xff or stray continuation byte
+        if i + need >= n:
+            return i  # truncated sequence at end of bytes
+        for k in range(1, need + 1):
+            cb = raw_bytes[i + k]
+            if not (0x80 <= cb <= 0xbf):
+                return i
+        i += 1 + need
+    return n
 
 
 def _trim_s2s_trailer(raw_bytes: bytes) -> bytes:
     """Strip trailing S2S framing leakage from an extracted event body.
 
-    Between two `\\xa1\\x01` event markers the segment contains:
-        <event text>\\n<S2S framing metadata>
-    where the framing metadata is varint + length-prefixed protobuf-ish
-    fields from the next event's envelope. Naive byte-class trimming
-    fails because the framing contains length-prefixed substrings that
-    look printable (e.g. `\\x03FE\\x06resent`).
+    Between two `\\xa1\\x01` event markers, segments contain
+    `<event text><framing metadata>` where the framing is a varint +
+    length-prefixed protobuf-ish field from the next event's envelope.
+    The framing leaks contain length-prefixed substrings that look
+    printable in isolation (e.g. `\\x03FE\\x06resent`), so naive
+    trailing-byte trimming leaves them embedded in `_raw`.
 
-    The reliable boundary is the last `\\n` whose following byte is
-    non-text — that's where a real log line ends and the next event's
-    framing begins. If no such boundary exists, fall back to trimming
-    a non-text suffix.
+    Cut at the first byte that isn't valid UTF-8 text — that's where
+    the legitimate log line ends and the next event's framing begins,
+    regardless of whether a `\\n` separator preceded it.
     """
     if not raw_bytes:
         return raw_bytes
-    for i in range(len(raw_bytes) - 1, -1, -1):
-        if raw_bytes[i] == 0x0a:  # \n
-            after = raw_bytes[i + 1:]
-            if not after:
-                return raw_bytes  # ends cleanly with \n, nothing to strip
-            if not _is_text_byte(after[0]):
-                return raw_bytes[:i + 1]
-    # No \n delimiter — strip any non-text suffix.
-    end = len(raw_bytes)
-    while end > 0 and not _is_text_byte(raw_bytes[end - 1]):
-        end -= 1
-    return raw_bytes[:end]
+    cut = _scan_first_non_text(raw_bytes)
+    if cut == len(raw_bytes):
+        return raw_bytes
+    return raw_bytes[:cut]
 
 
 class TeeListener:
