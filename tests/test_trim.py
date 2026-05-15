@@ -201,3 +201,101 @@ def test_source_preserves_single_slash_path():
     _, events = tl._parse_s2s_stream(segment, host="h")
     assert events
     assert all(ev["source"] == "/var/log/syslog" for ev in events)
+
+
+# --- #13: real index extracted from _MetaData:Index segment ----------------
+
+
+def _build_path_then_indexed_event_segment(path: bytes, index_name: bytes,
+                                            event_text: bytes) -> bytes:
+    """Like `_build_path_then_event_segment` but the `_MetaData:Index`
+    payload starts with the 1-byte length-prefixed index name observed
+    in real S2S v3 captures (`<len:u8><name><marker:2><event>`).
+
+    Example real payload: `\\x0e_introspection\\xf1\\x02{"datetime":"..."}`"""
+    def chan(name: bytes, payload: bytes) -> bytes:
+        return bytes([len(name)]) + name + payload
+    idx_payload = bytes([len(index_name)]) + index_name + b"\xa1\x01" + event_text
+    return (
+        chan(b"_path", path)
+        + chan(b"_MetaData:Index", idx_payload)
+        + chan(b"_raw", b"")
+        + chan(b"_path", b"/x")
+        + chan(b"_MetaData:Index", b"")
+        + chan(b"_raw", b"")
+        + b"\x00" * 64
+    )
+
+
+def test_event_index_uses_metadata_segment_name():
+    """#13: when `_MetaData:Index` carries `_internal` as its length-
+    prefixed name, the emitted event should have `index=_internal`, not
+    the default `main`."""
+    tl = _make_listener()
+    segment = _build_path_then_indexed_event_segment(
+        path=b"/opt/splunkforwarder/var/log/splunk/splunkd.log",
+        index_name=b"_internal",
+        event_text=b"05-14-2026 12:00:00 INFO TailReader read file\n",
+    )
+    _, events = tl._parse_s2s_stream(segment, host="lima-splunk-uf")
+    assert events
+    for ev in events:
+        assert ev["index"] == "_internal", f"expected _internal, got {ev['index']!r}"
+
+
+def test_event_index_audit_extracted():
+    tl = _make_listener()
+    segment = _build_path_then_indexed_event_segment(
+        path=b"/var/log/audit/audit.log",
+        index_name=b"_audit",
+        event_text=b"05-14-2026 12:00:00 audit event\n",
+    )
+    _, events = tl._parse_s2s_stream(segment, host="h")
+    assert events
+    assert all(ev["index"] == "_audit" for ev in events)
+
+
+def test_event_index_falls_back_when_segment_has_no_name():
+    """If `_MetaData:Index` payload doesn't start with a valid
+    length-prefixed name (just `\\xa1\\x01<event>`), fall back to the
+    previous `last_index` (default `main` here)."""
+    def chan(name: bytes, payload: bytes) -> bytes:
+        return bytes([len(name)]) + name + payload
+    tl = _make_listener()
+    segment = (
+        chan(b"_path", b"/var/log/syslog")
+        + chan(b"_MetaData:Index", b"\xa1\x01" + b"05-14-2026 12:00:00 hello\n")
+        + chan(b"_raw", b"")
+        + chan(b"_path", b"/x")
+        + chan(b"_MetaData:Index", b"")
+        + chan(b"_raw", b"")
+        + b"\x00" * 64
+    )
+    _, events = tl._parse_s2s_stream(segment, host="h")
+    assert events
+    assert all(ev["index"] == "main" for ev in events)
+
+
+def test_event_index_rejects_invalid_name_bytes():
+    """A 1-byte length that points to non-ASCII junk must NOT be used as
+    the index name; fall through to the default."""
+    def chan(name: bytes, payload: bytes) -> bytes:
+        return bytes([len(name)]) + name + payload
+    tl = _make_listener()
+    # length=5 but the next 5 bytes are 0xff 0xfe 0x00 0x01 0x02 — not a valid name
+    idx_payload = b"\x05\xff\xfe\x00\x01\x02\xa1\x01hello\n"
+    segment = (
+        chan(b"_path", b"/var/log/syslog")
+        + chan(b"_MetaData:Index", idx_payload)
+        + chan(b"_raw", b"")
+        + chan(b"_path", b"/x")
+        + chan(b"_MetaData:Index", b"")
+        + chan(b"_raw", b"")
+        + b"\x00" * 64
+    )
+    _, events = tl._parse_s2s_stream(segment, host="h")
+    # Either zero events (printable_ratio filter rejected the binary-prefixed
+    # text) or events with index=main (fallback). Either way must NOT have
+    # \xff/\xfe leaking into the index field.
+    for ev in events:
+        assert ev["index"] == "main"

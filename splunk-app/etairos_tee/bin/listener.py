@@ -472,8 +472,30 @@ class TeeListener:
                 # Collapse `//opt/...` / `///` runs from the unix-slash slice.
                 last_path = re.sub(r"^/+", "/", last_path)
             elif chan == "_MetaData:Index" and len(segment) > 6:
-                # Format: 4-byte index_len + index_name + \xa1\x01 + log_text
-                # Or sometimes: just \xa1\x01 + log_text (no index prefix)
+                # #13: extract the real index from the segment header.
+                # Wire shape (captured from live S2S v3 to UF, see
+                # /tmp/s2s_live_sh.bin):
+                #
+                #   <1-byte name_len> <name bytes> <2-byte marker> <event...>
+                #
+                # Example: `\x0e_introspection\xf1\x02{"datetime":"..."}`
+                #
+                # The 2-byte marker after the name varies per event
+                # (\xf1\x02, \xba\x01, \x80\x04, ...) — that's the same
+                # varint-style framing the marker auto-detector below
+                # picks up. We only need to peel the 1-byte name prefix
+                # to get the real index name.
+                name_len = segment[0] if len(segment) >= 1 else 0
+                if 0 < name_len < 64 and 1 + name_len <= len(segment):
+                    candidate_bytes = segment[1:1 + name_len]
+                    try:
+                        candidate = candidate_bytes.decode("ascii")
+                    except UnicodeDecodeError:
+                        candidate = ""
+                    # Valid Splunk index names: alphanumeric + underscore
+                    # + hyphen; must start with letter or underscore.
+                    if candidate and re.match(r"^[A-Za-z_][A-Za-z0-9_\-]*$", candidate):
+                        last_index = candidate
                 idx = 0
                 # Try to find \xa1\x01 event markers
                 # All known S2S v3 event start markers
